@@ -306,7 +306,7 @@ const Profile = () => {
               <h1 className="text-3xl font-bold text-white">My Profile</h1>
               <button
                 onClick={handleLogout}
-                className="px-6 py-3 bg-white bg-opacity-20 text-white rounded-lg hover:bg-opacity-30 transition-all duration-200 font-medium backdrop-blur-sm"
+                className="px-6 py-3 bg-white text-indigo-700 rounded-lg hover:bg-indigo-50 transition-colors duration-200 font-medium backdrop-blur-sm"
               >
                 Logout
               </button>
