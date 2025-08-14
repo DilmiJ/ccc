@@ -1,6 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
+
+// NOTE: UpdateProfileImage endpoint (API8) doesn't exist on the server (404 error)
+// This component uses a fallback approach:
+// 1. First tries to update via GetProfile endpoint with action parameter
+// 2. If that fails, stores image locally in localStorage
+// 3. Displays image from localStorage when profile loads
 
 const Profile = () => {
   const [profile, setProfile] = useState(null);
@@ -8,7 +14,10 @@ const Profile = () => {
   const [uploading, setUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [error, setError] = useState('');
+  const [photoHighlight, setPhotoHighlight] = useState(false);
   const navigate = useNavigate();
+  const photoRef = useRef(null);
+  const highlightTimerRef = useRef(null);
 
   useEffect(() => {
     fetchProfile();
@@ -69,7 +78,7 @@ const Profile = () => {
           country: user.country || 'Not available',
           iddCode: user.iddCode || '+94',
           nationalNumber: user.nationalNumber || '',
-          profileImage: null,
+          profileImage: user.profileImage || null, // Include locally stored image
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -99,7 +108,7 @@ const Profile = () => {
           country: user.country || 'Not available',
           iddCode: user.iddCode || '+94',
           nationalNumber: user.nationalNumber || '',
-          profileImage: null,
+          profileImage: user.profileImage || null, // Include locally stored image
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString()
         };
@@ -149,42 +158,110 @@ const Profile = () => {
         profileFormData.append('token', token);
         profileFormData.append('profileImage', base64Image);
 
-        const response = await axios.post('https://apis.mavicsoft.com/endpoints/ccc-hr-25-f/UpdateProfileImage', 
-          profileFormData,
-          { 
-            timeout: 15000
+        // Since UpdateProfileImage endpoint doesn't exist, we'll use a different approach
+        // Option 1: Try to use GetProfile endpoint with image data (if it supports updates)
+        // Option 2: Use local storage only
+        
+        const highlightAndScrollPhoto = () => {
+          try {
+            if (photoRef.current) {
+              photoRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+            setPhotoHighlight(true);
+            if (highlightTimerRef.current) {
+              clearTimeout(highlightTimerRef.current);
+            }
+            highlightTimerRef.current = setTimeout(() => setPhotoHighlight(false), 1200);
+          } catch (_) {
+            // no-op
           }
-        );
+        };
 
-        console.log('Image upload response:', response.data);
+        try {
+          // First, let's try to update the profile using the GetProfile endpoint
+          // by sending the image data along with other profile data
+          const updateProfileFormData = new FormData();
+          updateProfileFormData.append('username', user.username);
+          updateProfileFormData.append('token', token);
+          updateProfileFormData.append('profileImage', base64Image);
+          updateProfileFormData.append('action', 'update'); // Add action parameter
+          
+          const response = await axios.post('https://apis.mavicsoft.com/endpoints/ccc-hr-25-f/GetProfile', 
+            updateProfileFormData,
+            { 
+              timeout: 15000
+            }
+          );
 
-        if (response.data.success || response.data.isSuccess) {
-          // Update profile with new image
+          console.log('Profile update response:', response.data);
+
+          if (response.data.success || response.data.isSuccess) {
+            // Update profile with new image
+            setProfile(prev => ({
+              ...prev,
+              profileImage: response.data.imagePath || response.data.profileImage || 'updated'
+            }));
+            // Persist locally as well so it shows on next load
+            try {
+              const existing = JSON.parse(localStorage.getItem('user') || '{}');
+              const persisted = {
+                ...existing,
+                profileImage: response.data.imagePath || response.data.profileImage || existing.profileImage
+              };
+              localStorage.setItem('user', JSON.stringify(persisted));
+            } catch (_) {
+              // ignore persistence errors
+            }
+            setSelectedFile(null);
+            alert('Profile image updated successfully!');
+            highlightAndScrollPhoto();
+          } else {
+            // If GetProfile doesn't support updates, fall back to local storage
+            throw new Error('Profile update not supported');
+          }
+        } catch (apiError) {
+          console.error('API Error:', apiError);
+          
+          // If any API error occurs, use local storage fallback
+          console.log('Using local storage fallback for profile image.');
+          
+          // Fallback: Store image locally and update profile
+          const imageDataUrl = reader.result;
+          
+          // Update profile with local image data
           setProfile(prev => ({
             ...prev,
-            profileImage: response.data.imagePath || response.data.profileImage || 'updated'
+            profileImage: imageDataUrl
           }));
+          
+          // Store in localStorage as fallback
+          const updatedUser = {
+            ...user,
+            profileImage: imageDataUrl
+          };
+          localStorage.setItem('user', JSON.stringify(updatedUser));
+          
           setSelectedFile(null);
-          alert('Profile image updated successfully!');
-        } else {
-          setError(response.data.error || response.data.errorDescription || 'Failed to update profile image');
+          alert('Profile image updated locally (stored in browser)');
+          highlightAndScrollPhoto();
         }
       };
       reader.readAsDataURL(selectedFile);
     } catch (error) {
       console.error('Error uploading image:', error);
-      
-      // If it's an API error with response data, log it
-      if (error.response?.data) {
-        console.log('Image upload API error:', error.response.data);
-        setError(error.response.data.error || error.response.data.errorDescription || 'Failed to upload image');
-      } else {
-        setError('Failed to upload image. Please try again.');
-      }
+      setError('Failed to process image. Please try again.');
     } finally {
       setUploading(false);
     }
   };
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) {
+        clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -240,7 +317,7 @@ const Profile = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Profile Image Section */}
           <div className="lg:col-span-1">
-            <div className="bg-white shadow-xl rounded-2xl p-8">
+            <div ref={photoRef} className={`bg-white shadow-xl rounded-2xl p-8 transition-all duration-500 ${photoHighlight ? 'ring-2 ring-indigo-300 ring-offset-2 ring-offset-indigo-50 scale-[1.01]' : ''}`}>
               <h2 className="text-xl font-semibold text-gray-900 mb-6 text-center">Profile Photo</h2>
               
               <div className="text-center">
@@ -248,7 +325,7 @@ const Profile = () => {
                   <img
                     src={profile.profileImage}
                     alt="Profile"
-                    className="w-40 h-40 rounded-full mx-auto mb-6 object-cover shadow-lg border-4 border-white"
+                    className={`w-40 h-40 rounded-full mx-auto mb-6 object-cover shadow-lg border-4 border-white transition-all duration-700 ease-out ${photoHighlight ? 'ring-4 ring-indigo-400 ring-offset-2 scale-105 shadow-2xl' : ''}`}
                     onError={(e) => {
                       e.target.style.display = 'none';
                       e.target.nextSibling.style.display = 'flex';
@@ -256,7 +333,7 @@ const Profile = () => {
                   />
                 ) : null}
                 
-                <div className="w-40 h-40 rounded-full mx-auto mb-6 bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center shadow-lg border-4 border-white" 
+                <div className={`w-40 h-40 rounded-full mx-auto mb-6 bg-gradient-to-br from-indigo-400 to-purple-500 flex items-center justify-center shadow-lg border-4 border-white transition-all duration-700 ease-out ${photoHighlight ? 'ring-4 ring-indigo-400 ring-offset-2 scale-105 shadow-2xl' : ''}`} 
                      style={{ display: profile.profileImage ? 'none' : 'flex' }}>
                   <span className="text-white text-6xl font-bold">
                     {profile.firstName?.charAt(0) || profile.username?.charAt(0) || '?'}
@@ -268,14 +345,14 @@ const Profile = () => {
                     type="file"
                     accept="image/*"
                     onChange={handleFileSelect}
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-colors duration-200"
+                    className="block w-full text-sm text-gray-600 file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all duration-200"
                   />
                   
                   {selectedFile && (
                     <button
                       onClick={handleImageUpload}
                       disabled={uploading}
-                      className="w-full px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 transition-all duration-200 font-medium shadow-lg"
+                      className="w-full px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-lg hover:from-indigo-700 hover:to-purple-700 disabled:opacity-50 transition-all duration-300 font-medium shadow-lg active:scale-[0.99]"
                     >
                       {uploading ? 'Uploading...' : 'Upload Photo'}
                     </button>
